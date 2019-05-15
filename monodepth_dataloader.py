@@ -111,3 +111,94 @@ class MonodepthDataloader(object):
         image  = tf.image.resize_images(image,  [self.params.height, self.params.width], tf.image.ResizeMethod.AREA)
 
         return image
+
+
+class TemporalDepthDataloader(MonodepthDataloader):
+    def __init__(self, data_path, filenames_file, params, dataset, mode):
+        self.data_path = data_path
+        self.params = params
+        self.dataset = dataset
+        self.mode = mode
+
+        input_queue = tf.train.string_input_producer([filenames_file], shuffle=False)
+        line_reader = tf.TextLineReader()
+        _, line = line_reader.read(input_queue)
+        split_line = tf.string_split([line]).values
+
+        first_image_path = tf.string_join([self.data_path, split_line[0]])
+        second_image_path = tf.string_join([self.data_path, split_line[2]])
+        first_oxts_path = tf.string_join([self.data_path, split_line[1]])
+        second_oxts_path = tf.string_join([self.data_path, split_line[3]])
+        timestamp = tf.strings.to_number(split_line[4], out_type=tf.dtypes.float32)
+
+        # we load only one image for test, except if we trained a stereo model
+        if mode == 'test':
+            first_image = self.read_image(first_image_path)
+        else:
+            first_image = self.read_image(first_image_path)
+            second_image = self.read_image(second_image_path)
+
+            first_oxts = self.read_oxts(first_oxts_path)
+            second_oxts = self.read_oxts(second_oxts_path)
+
+            delta_position, delta_angle = self.compute_delta_position_angle(first_oxts, second_oxts, timestamp)
+
+
+        if mode == 'train':
+            # randomly flip images
+            do_flip = tf.random_uniform([], 0, 1)
+            first_image = tf.cond(do_flip > 0.5, lambda: tf.image.flip_left_right(first_image), lambda: first_image)
+            second_image = tf.cond(do_flip > 0.5, lambda: tf.image.flip_left_right(second_image),  lambda: second_image)
+            delta_position = delta_position * [0., -1., 0.]
+            delta_angle = delta_angle * [0., -1., 0.]
+
+            # randomly swap images
+            do_swap = tf.random_uniform([], 0, 1)
+            first_image = tf.cond(do_swap > 0.5, lambda: second_image, lambda: first_image)
+            second_image = tf.cond(do_swap > 0.5, lambda: first_image,  lambda: second_image)
+            delta_position = delta_position * -1.
+            delta_angle = delta_angle * -1.
+
+            # randomly augment images
+            do_augment  = tf.random_uniform([], 0, 1)
+            first_image, second_image = tf.cond(do_augment > 0.5, lambda: self.augment_image_pair(first_image, second_image), lambda: (first_image, second_image))
+
+            first_image.set_shape( [None, None, 3])
+            second_image.set_shape([None, None, 3])
+            delta_position.set_shape([3])
+            delta_angle.set_shape([3])
+
+            # capacity = min_after_dequeue + (num_threads + a small safety margin) * batch_size
+            min_after_dequeue = 2048
+            capacity = min_after_dequeue + 4 * params.batch_size
+            # self.first_image_batch, self.first_oxts_batch, self.second_image_batch, self.second_oxts_batch = \
+            #     first_image[None, :], first_oxts[None, :], second_image[None, :], second_oxts[None, :]
+            self.first_image_batch, self.second_image_batch, self.delta_position, self.delta_angle = \
+                tf.train.shuffle_batch(
+                    [first_image, second_image, delta_position, delta_angle],
+                    params.batch_size, capacity, min_after_dequeue, params.num_threads)
+
+        elif mode == 'test':
+            self.left_image_batch = tf.stack([first_image,  tf.image.flip_left_right(first_image)],  0)
+            self.left_image_batch.set_shape( [2, None, None, 3])
+
+            if self.params.do_stereo:
+                self.right_image_batch = tf.stack([second_image,  tf.image.flip_left_right(second_image)],  0)
+                self.right_image_batch.set_shape( [2, None, None, 3])
+
+    def read_oxts(self, oxts_path):
+        fs = tf.io.read_file(oxts_path)
+        oxts = tf.io.decode_csv(
+            fs,
+            record_defaults=[[float(0)]] * 9,
+            field_delim=" ",
+            select_cols=[8, 9, 10, 14, 15, 16, 20, 21, 22])
+        return tf.stack(oxts)
+
+    def compute_delta_position_angle(self, first_oxts, second_oxts, delta_time):
+        oxts = (first_oxts + second_oxts) / 2.
+
+        delta_position = oxts[0:3] * delta_time + oxts[3:6] * (delta_time ** 2)
+        delta_angle = oxts[6:9] * delta_time
+
+        return delta_position, delta_angle

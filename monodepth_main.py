@@ -92,13 +92,18 @@ def train(params):
         print("total number of samples: {}".format(num_training_samples))
         print("total number of steps: {}".format(num_total_steps))
 
-        dataloader = MonodepthDataloader(args.data_path, args.filenames_file, params, args.dataset, args.mode)
-        left  = dataloader.left_image_batch
-        right = dataloader.right_image_batch
+        #dataloader = MonodepthDataloader(args.data_path, args.filenames_file, params, args.dataset, args.mode)
+        dataloader = TemporalDepthDataloader(args.data_path, args.filenames_file, params, args.dataset, args.mode)
+        first_image  = dataloader.first_image_batch
+        second_image = dataloader.second_image_batch
+        delta_position = dataloader.delta_position
+        delta_angle = dataloader.delta_angle
 
         # split for each gpu
-        left_splits  = tf.split(left,  args.num_gpus, 0)
-        right_splits = tf.split(right, args.num_gpus, 0)
+        first_image_split  = tf.split(first_image,  args.num_gpus, 0)
+        second_image_split = tf.split(second_image, args.num_gpus, 0)
+        delta_position_split = tf.split(delta_position, args.num_gpus, 0)
+        delta_angle_split = tf.split(delta_angle, args.num_gpus, 0)
 
         tower_grads  = []
         tower_losses = []
@@ -107,7 +112,15 @@ def train(params):
             for i in range(args.num_gpus):
                 with tf.device('/gpu:%d' % i):
 
-                    model = MonodepthModel(params, args.mode, left_splits[i], right_splits[i], reuse_variables, i)
+                    model = MonodepthModel(
+                        params=params,
+                        mode=args.mode,
+                        first_image=first_image_split[i],
+                        second_image=second_image_split[i],
+                        delta_position=delta_position_split[i],
+                        delta_angle=delta_angle_split[i],
+                        reuse_variables=reuse_variables,
+                        model_index=i)
 
                     loss = model.total_loss
                     tower_losses.append(loss)
@@ -179,6 +192,7 @@ def test(params):
     """Test function."""
 
     dataloader = MonodepthDataloader(args.data_path, args.filenames_file, params, args.dataset, args.mode)
+    #dataloader = TemporalDepthDataloader(args.data_path, args.filenames_file, params, args.dataset, args.mode)
     left  = dataloader.left_image_batch
     right = dataloader.right_image_batch
 

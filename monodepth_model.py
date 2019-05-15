@@ -38,11 +38,13 @@ monodepth_parameters = namedtuple('parameters',
 class MonodepthModel(object):
     """monodepth model"""
 
-    def __init__(self, params, mode, left, right, reuse_variables=None, model_index=0):
+    def __init__(self, params, mode, first_image, second_image, delta_position, delta_angle, reuse_variables=None, model_index=0):
         self.params = params
         self.mode = mode
-        self.left = left
-        self.right = right
+        self.first_image = first_image
+        self.second_image = second_image
+        self.delta_position = delta_position
+        self.delta_angle = delta_angle
         self.model_collection = ['model_' + str(model_index)]
 
         self.reuse_variables = reuse_variables
@@ -168,6 +170,19 @@ class MonodepthModel(object):
         conv = slim.conv2d_transpose(p_x, num_out_layers, kernel_size, scale, 'SAME')
         return conv[:,3:-1,3:-1,:]
 
+    def posenet(self, conv_shape):
+        angle_pos = tf.concat([self.delta_position, self.delta_angle], axis=1)
+        pose_out = slim.batch_norm(
+            angle_pos, scale=True, center=True, is_training=self.mode != 'test')
+        pose_out = slim.fully_connected(pose_out, 32, activation_fn=tf.nn.elu)
+        pose_out = slim.fully_connected(pose_out, 16, activation_fn=tf.nn.elu)
+
+        # tile into the spatial shape of the convolution:
+        pose_tiled = tf.tile(pose_out, [1, conv_shape[1].value * conv_shape[2].value])
+        pose_reshaped = tf.reshape(pose_tiled, (conv_shape[0], conv_shape[1], conv_shape[2], 16))
+
+        return pose_reshaped
+
     def build_vgg(self):
         #set convenience functions
         conv = self.conv
@@ -192,9 +207,15 @@ class MonodepthModel(object):
             skip4 = conv4
             skip5 = conv5
             skip6 = conv6
+
+        with tf.variable_scope('posenet'):
+            pose_out = self.posenet(conv7.shape)
+            posed_conv7 = tf.concat([conv7, pose_out], axis=3)
+            # use a 1x1 convolution to resize back to normal
+            posed_conv7 = conv(posed_conv7, 512, 1, 1)
         
         with tf.variable_scope('decoder'):
-            upconv7 = upconv(conv7,  512, 3, 2) #H/64
+            upconv7 = upconv(posed_conv7,  512, 3, 2) #H/64
             concat7 = tf.concat([upconv7, skip6], 3)
             iconv7  = conv(concat7,  512, 3, 1)
 
@@ -251,10 +272,16 @@ class MonodepthModel(object):
             skip3 = conv2
             skip4 = conv3
             skip5 = conv4
+
+        with tf.variable_scope('posenet'):
+            pose_out = self.posenet(conv5.shape)
+            posed_conv5 = tf.concat([conv5, pose_out], axis=3)
+            # use a 1x1 convolution to resize back to normal
+            posed_conv5 = conv(posed_conv5, 512, 1, 1)
         
         # DECODING
         with tf.variable_scope('decoder'):
-            upconv6 = upconv(conv5,   512, 3, 2) #H/32
+            upconv6 = upconv(posed_conv5,   512, 3, 2) #H/32
             concat6 = tf.concat([upconv6, skip5], 3)
             iconv6  = conv(concat6,   512, 3, 1)
 
@@ -289,14 +316,14 @@ class MonodepthModel(object):
         with slim.arg_scope([slim.conv2d, slim.conv2d_transpose], activation_fn=tf.nn.elu):
             with tf.variable_scope('model', reuse=self.reuse_variables):
 
-                self.left_pyramid  = self.scale_pyramid(self.left,  4)
+                self.left_pyramid  = self.scale_pyramid(self.first_image, 4)
                 if self.mode == 'train':
-                    self.right_pyramid = self.scale_pyramid(self.right, 4)
+                    self.right_pyramid = self.scale_pyramid(self.second_image, 4)
 
                 if self.params.do_stereo:
-                    self.model_input = tf.concat([self.left, self.right], 3)
+                    self.model_input = tf.concat([self.first_image, self.second_image], 3)
                 else:
-                    self.model_input = self.left
+                    self.model_input = self.first_image
 
                 #build model
                 if self.params.encoder == 'vgg':
@@ -385,6 +412,15 @@ class MonodepthModel(object):
                     tf.summary.image('l1_right_' + str(i), self.l1_right[i], max_outputs=4, collections=self.model_collection)
 
             if self.params.full_summary:
-                tf.summary.image('left',  self.left,   max_outputs=4, collections=self.model_collection)
-                tf.summary.image('right', self.right,  max_outputs=4, collections=self.model_collection)
+                tf.summary.image('left', self.first_image, max_outputs=4, collections=self.model_collection)
+                tf.summary.image('right', self.second_image, max_outputs=4, collections=self.model_collection)
+
+            if self.params.full_summary:
+                tf.summary.histogram("delta_position_f", self.delta_position[:, 0], collections=self.model_collection)
+                tf.summary.histogram("delta_position_l", self.delta_position[:, 1], collections=self.model_collection)
+                tf.summary.histogram("delta_position_u", self.delta_position[:, 2], collections=self.model_collection)
+
+                tf.summary.histogram("delta_angle_f", self.delta_angle[:, 0], collections=self.model_collection)
+                tf.summary.histogram("delta_angle_l", self.delta_angle[:, 1], collections=self.model_collection)
+                tf.summary.histogram("delta_angle_u", self.delta_angle[:, 2], collections=self.model_collection)
 
