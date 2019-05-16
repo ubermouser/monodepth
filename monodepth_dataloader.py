@@ -11,6 +11,8 @@
 """
 
 from __future__ import absolute_import, division, print_function
+
+import numpy as np
 import tensorflow as tf
 
 
@@ -120,6 +122,11 @@ class TemporalDepthDataloader(MonodepthDataloader):
         self.dataset = dataset
         self.mode = mode
 
+        self.left_image_batch  = None
+        self.right_image_batch = None
+        self.delta_position = None
+        self.delta_angle = None
+
         input_queue = tf.train.string_input_producer([filenames_file], shuffle=False)
         line_reader = tf.TextLineReader()
         _, line = line_reader.read(input_queue)
@@ -149,15 +156,15 @@ class TemporalDepthDataloader(MonodepthDataloader):
             do_flip = tf.random_uniform([], 0, 1)
             first_image = tf.cond(do_flip > 0.5, lambda: tf.image.flip_left_right(first_image), lambda: first_image)
             second_image = tf.cond(do_flip > 0.5, lambda: tf.image.flip_left_right(second_image),  lambda: second_image)
-            delta_position = delta_position * [0., -1., 0.]
-            delta_angle = delta_angle * [0., -1., 0.]
+            delta_position = tf.cond(do_flip > 0.5, lambda: delta_position * [1., -1., 1.], lambda: delta_position)
+            delta_angle = tf.cond(do_flip > 0.5, lambda: delta_angle * [1., -1., 1.], lambda: delta_angle)
 
             # randomly swap images
             do_swap = tf.random_uniform([], 0, 1)
             first_image = tf.cond(do_swap > 0.5, lambda: second_image, lambda: first_image)
             second_image = tf.cond(do_swap > 0.5, lambda: first_image,  lambda: second_image)
-            delta_position = delta_position * -1.
-            delta_angle = delta_angle * -1.
+            delta_position = tf.cond(do_swap > 0.5, lambda: delta_position * -1., lambda: delta_position)
+            delta_angle = tf.cond(do_swap > 0.5, lambda: delta_angle * -1., lambda: delta_angle)
 
             # randomly augment images
             do_augment  = tf.random_uniform([], 0, 1)
@@ -181,6 +188,8 @@ class TemporalDepthDataloader(MonodepthDataloader):
         elif mode == 'test':
             self.left_image_batch = tf.stack([first_image,  tf.image.flip_left_right(first_image)],  0)
             self.left_image_batch.set_shape( [2, None, None, 3])
+            self.delta_position = tf.constant([[0., 0., 0.]] * 2)
+            self.delta_angle = tf.constant([[0., 0., 0.]] * 2)
 
             if self.params.do_stereo:
                 self.right_image_batch = tf.stack([second_image,  tf.image.flip_left_right(second_image)],  0)

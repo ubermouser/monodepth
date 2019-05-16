@@ -191,12 +191,14 @@ def train(params):
 def test(params):
     """Test function."""
 
-    dataloader = MonodepthDataloader(args.data_path, args.filenames_file, params, args.dataset, args.mode)
-    #dataloader = TemporalDepthDataloader(args.data_path, args.filenames_file, params, args.dataset, args.mode)
+    #dataloader = MonodepthDataloader(args.data_path, args.filenames_file, params, args.dataset, args.mode)
+    dataloader = TemporalDepthDataloader(args.data_path, args.filenames_file, params, args.dataset, args.mode)
     left  = dataloader.left_image_batch
     right = dataloader.right_image_batch
+    delta_position = dataloader.delta_position
+    delta_angle = dataloader.delta_angle
 
-    model = MonodepthModel(params, args.mode, left, right)
+    model = MonodepthModel(params, args.mode, left, right, delta_angle=delta_angle, delta_position=delta_position)
 
     # SESSION
     config = tf.ConfigProto(allow_soft_placement=True)

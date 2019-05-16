@@ -173,7 +173,7 @@ class MonodepthModel(object):
     def posenet(self, conv_shape):
         angle_pos = tf.concat([self.delta_position, self.delta_angle], axis=1)
         pose_out = slim.batch_norm(
-            angle_pos, scale=True, center=True, is_training=self.mode != 'test')
+            angle_pos, scale=True, center=True, is_training=self.mode == 'train')
         pose_out = slim.fully_connected(pose_out, 32, activation_fn=tf.nn.elu)
         pose_out = slim.fully_connected(pose_out, 16, activation_fn=tf.nn.elu)
 

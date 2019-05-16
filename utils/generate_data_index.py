@@ -46,7 +46,8 @@ OP_IMAGE_EXPRESSION = os.path.join("image_03", "data", "%s.jpg")
 OXTS_EXPRESSION = os.path.join("oxts", "data", "%s.txt")
 TIME_EXPRESSION = os.path.join("oxts", "timestamps.txt")
 DELTA_TIMESTEP = 2
-
+# camera 3 is always 0.54 meters to the right of camera 2. They have the same height, 1.65m
+# TODO: use lat-lon-alt + roll/pitch/yaw to compute absolute pose difference between two images
 
 def main(data_directory):
     lines = []
