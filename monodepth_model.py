@@ -18,6 +18,7 @@ from collections import namedtuple
 import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
+import tensorflow.contrib.resampler as resampler
 
 from bilinear_sampler import *
 
@@ -85,10 +86,34 @@ class MonodepthModel(object):
         return scaled_imgs
 
     def generate_image_left(self, img, disp):
-        return bilinear_sampler_1d_h(img, -disp)
+        return self.bilinear_sampler(img, -disp)
 
     def generate_image_right(self, img, disp):
-        return bilinear_sampler_1d_h(img, disp)
+        return self.bilinear_sampler(img, disp)
+
+    def bilinear_sampler(self, img, disp, name='bilinear_sampler'):
+        def _transform(img, disp):
+            with tf.variable_scope('transform'):
+                # grid of (x_t, y_t, 1), eq (1) in ref [1]
+                x_t, y_t = tf.meshgrid(tf.linspace(0.0, _width_f - 1.0, _width),
+                                       tf.linspace(0.0, _height_f - 1.0, _height))
+                offsets = tf.concat([x_t[:, :, None], y_t[:, :, None]], axis=-1)
+
+                offset_disparities = disp * [_width_f, _height_f] + offsets[None, :, :, :]
+
+                return resampler.resampler(img, offset_disparities, name='bilinear_sampler')
+
+        with tf.variable_scope(name):
+            _num_batch = tf.shape(img)[0]
+            _height = tf.shape(img)[1]
+            _width = tf.shape(img)[2]
+            _num_channels = tf.shape(img)[3]
+
+            _height_f = tf.cast(_height, tf.float32)
+            _width_f = tf.cast(_width, tf.float32)
+
+            output = _transform(img, disp)
+            return output
 
     def SSIM(self, x, y):
         C1 = 0.01 ** 2
@@ -123,7 +148,7 @@ class MonodepthModel(object):
         return smoothness_x + smoothness_y
 
     def get_disp(self, x):
-        disp = 0.3 * self.conv(x, 2, 3, 1, tf.nn.sigmoid)
+        disp = 0.3 * self.conv(x, 4, 3, 1, tf.nn.tanh)
         return disp
 
     def conv(self, x, num_out_layers, kernel_size, stride, activation_fn=tf.nn.elu):
@@ -337,8 +362,8 @@ class MonodepthModel(object):
         # STORE DISPARITIES
         with tf.variable_scope('disparities'):
             self.disp_est  = [self.disp1, self.disp2, self.disp3, self.disp4]
-            self.disp_left_est  = [tf.expand_dims(d[:,:,:,0], 3) for d in self.disp_est]
-            self.disp_right_est = [tf.expand_dims(d[:,:,:,1], 3) for d in self.disp_est]
+            self.disp_left_est  = [d[:,:,:,0:2] for d in self.disp_est]
+            self.disp_right_est = [d[:,:,:,2:4] for d in self.disp_est]
 
         if self.mode == 'test':
             return
@@ -400,8 +425,12 @@ class MonodepthModel(object):
                 tf.summary.scalar('image_loss_' + str(i), self.image_loss_left[i] + self.image_loss_right[i], collections=self.model_collection)
                 tf.summary.scalar('disp_gradient_loss_' + str(i), self.disp_left_loss[i] + self.disp_right_loss[i], collections=self.model_collection)
                 tf.summary.scalar('lr_loss_' + str(i), self.lr_left_loss[i] + self.lr_right_loss[i], collections=self.model_collection)
-                tf.summary.image('disp_left_est_' + str(i), self.disp_left_est[i], max_outputs=4, collections=self.model_collection)
-                tf.summary.image('disp_right_est_' + str(i), self.disp_right_est[i], max_outputs=4, collections=self.model_collection)
+
+                zeros = tf.zeros(shape=tuple(self.disp_left_est[i].shape[0:3]) + (1,), dtype=self.disp_left_est[i].dtype)
+                disparity_left_rgb = tf.concat([self.disp_left_est[i], zeros], axis=3)
+                disparity_right_rgb = tf.concat([self.disp_right_est[i], zeros], axis=3)
+                tf.summary.image('disp_left_est_' + str(i), disparity_left_rgb, max_outputs=4, collections=self.model_collection)
+                tf.summary.image('disp_right_est_' + str(i), disparity_right_rgb, max_outputs=4, collections=self.model_collection)
 
                 if self.params.full_summary:
                     tf.summary.image('left_est_' + str(i), self.left_est[i], max_outputs=4, collections=self.model_collection)

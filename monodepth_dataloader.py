@@ -122,8 +122,8 @@ class TemporalDepthDataloader(MonodepthDataloader):
         self.dataset = dataset
         self.mode = mode
 
-        self.left_image_batch  = None
-        self.right_image_batch = None
+        self.first_image_batch  = None
+        self.second_image_batch = None
         self.delta_position = None
         self.delta_angle = None
 
@@ -186,14 +186,14 @@ class TemporalDepthDataloader(MonodepthDataloader):
                     params.batch_size, capacity, min_after_dequeue, params.num_threads)
 
         elif mode == 'test':
-            self.left_image_batch = tf.stack([first_image,  tf.image.flip_left_right(first_image)],  0)
-            self.left_image_batch.set_shape( [2, None, None, 3])
+            self.first_image_batch = tf.stack([first_image,  tf.image.flip_left_right(first_image)],  0)
+            self.first_image_batch.set_shape( [2, None, None, 3])
             self.delta_position = tf.constant([[0., 0., 0.]] * 2)
             self.delta_angle = tf.constant([[0., 0., 0.]] * 2)
 
             if self.params.do_stereo:
-                self.right_image_batch = tf.stack([second_image,  tf.image.flip_left_right(second_image)],  0)
-                self.right_image_batch.set_shape( [2, None, None, 3])
+                self.second_image_batch = tf.stack([second_image,  tf.image.flip_left_right(second_image)],  0)
+                self.second_image_batch.set_shape( [2, None, None, 3])
 
     def read_oxts(self, oxts_path):
         fs = tf.io.read_file(oxts_path)
