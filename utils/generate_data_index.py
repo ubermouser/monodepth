@@ -6,6 +6,10 @@ import numpy as np
 import sys
 from glob import glob
 
+import functools
+
+import tqdm
+
 TRAIN_SEQUENCES = {
     '2011_09_26/2011_09_26_drive_0001_sync',
     '2011_09_26/2011_09_26_drive_0002_sync',
@@ -45,41 +49,92 @@ IMAGE_EXPRESSION = os.path.join("image_02", "data", "%s.jpg")
 OP_IMAGE_EXPRESSION = os.path.join("image_03", "data", "%s.jpg")
 OXTS_EXPRESSION = os.path.join("oxts", "data", "%s.txt")
 TIME_EXPRESSION = os.path.join("oxts", "timestamps.txt")
-DELTA_TIMESTEP = 2
+MAXIMUM_FRAMEDELTA = 10
+MINIMUM_DISTANCE = 0.5
+MAXIMUM_DISTANCE = 3.
+
 # camera 3 is always 0.54 meters to the right of camera 2. They have the same height, 1.65m
 # TODO: use lat-lon-alt + roll/pitch/yaw to compute absolute pose difference between two images
 
+
+@functools.lru_cache(maxsize=10000)
+def read_oxts(oxts_path):
+    with open(oxts_path) as oxts:
+        oxts_strs = oxts.read().split()
+
+        return np.asarray(
+            [float(oxts_strs[i]) for i in [8, 9, 10, 14, 15, 16, 20, 21, 22]],
+            dtype=np.float64
+        )
+
+
+def compute_delta_position_angle(first_oxts, second_oxts, first_time, second_time, alt_camera):
+    delta_time = second_time - first_time
+
+    oxts = (first_oxts + second_oxts) / 2.
+
+    delta_position = oxts[0:3] * delta_time + oxts[3:6] * (delta_time ** 2)
+    delta_angle = oxts[6:9] * delta_time
+
+    if alt_camera:
+        delta_position += [0., -0.54, 0.]
+
+    return delta_position, delta_angle
+
+
+def compute_distance(delta_position):
+    return np.sqrt(np.sum(delta_position ** 2))
+
+
 def main(data_directory):
     lines = []
-    for sequence in TRAIN_SEQUENCES:
+    excluded_distance = 0
+    for sequence in tqdm.tqdm(TRAIN_SEQUENCES):
         abspath = os.path.join(data_directory, sequence, GLOB_EXPRESSION)
-        frames = sorted(glob(abspath))
+        #frames = sorted(glob(abspath))
 
-        oxts_expr = os.path.join(sequence, OXTS_EXPRESSION)
+        oxts_expr = os.path.join(data_directory, sequence, OXTS_EXPRESSION)
         image_expr = os.path.join(sequence, IMAGE_EXPRESSION)
+        alt_image_expr = os.path.join(sequence, OP_IMAGE_EXPRESSION)
         timestamps = open(os.path.join(data_directory, sequence, TIME_EXPRESSION)).readlines()
         timestamps = [datetime.datetime.strptime(timestr[:-4], "%Y-%m-%d %H:%M:%S.%f").timestamp() for timestr in timestamps]
 
-        for i_last_frame in range(DELTA_TIMESTEP, len(frames)):
-            first_frame = frames[i_last_frame - DELTA_TIMESTEP]
-            last_frame = frames[i_last_frame]
+        for i_first_frame in range(len(timestamps)):
+                second_frame_range = range(
+                    i_first_frame, min(i_first_frame + MAXIMUM_FRAMEDELTA, len(timestamps)))
+                for i_second_frame in second_frame_range:
+                    first_frame_number = '%010d' % i_first_frame
+                    second_frame_number = '%010d' % i_second_frame
 
-            first_frame_number = os.path.splitext(os.path.basename(first_frame))[0]
-            first_frame = image_expr % first_frame_number
-            first_oxts = oxts_expr % first_frame_number
+                    first_oxts = read_oxts(oxts_expr % first_frame_number)
+                    second_oxts = read_oxts(oxts_expr % second_frame_number)
 
-            last_frame_number = os.path.splitext(os.path.basename(last_frame))[0]
-            last_frame = image_expr % last_frame_number
-            last_oxts = oxts_expr % last_frame_number
+                    first_timestamp = timestamps[i_first_frame]
+                    second_timestamp = timestamps[i_second_frame]
 
-            delta_timestamp = timestamps[i_last_frame] - timestamps[i_last_frame - DELTA_TIMESTEP]
+                    for alt_camera, alt_expr in [(False, image_expr), (True, alt_image_expr)]:
+                        delta_position, delta_angle = compute_delta_position_angle(
+                            first_oxts, second_oxts, first_timestamp, second_timestamp, alt_camera)
+                        distance = compute_distance(delta_position)
 
-            #assert os.path.exists(first_frame)
-            #assert os.path.exists(first_oxts)
-            #assert os.path.exists(last_frame)
-            #assert os.path.exists(last_oxts)
-            lines.append("%s %s %s %s %s" % (first_frame, first_oxts, last_frame, last_oxts, delta_timestamp))
+                        if MINIMUM_DISTANCE <= distance <= MAXIMUM_DISTANCE:
+                            first_frame = image_expr % first_frame_number
+                            second_frame = alt_expr % second_frame_number
+
+                            assert os.path.exists(os.path.join(data_directory, first_frame))
+                            assert os.path.exists(os.path.join(data_directory, second_frame))
+
+                            lines.append(
+                                "%s %s %.12f %.12f %.12f %.12f %.12f %.12f" % (
+                                first_frame, second_frame, delta_position[0], delta_position[1],
+                                delta_position[2], delta_angle[0], delta_angle[1], delta_angle[2])
+                             )
+                        else:
+                            excluded_distance += 1
+
     np.random.shuffle(lines)
+
+    print("%d total, %d excluded by distance" % (len(lines), excluded_distance), file=sys.stderr)
 
     for line in lines:
         print(line)
