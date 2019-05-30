@@ -33,7 +33,7 @@ monodepth_parameters = namedtuple('parameters',
                         'use_deconv, '
                         'alpha_image_loss, '
                         'disp_gradient_loss_weight, '
-                        'lr_loss_weight, '
+                        'fb_loss_weight, '
                         'full_summary')
 
 class MonodepthModel(object):
@@ -85,10 +85,10 @@ class MonodepthModel(object):
             scaled_imgs.append(tf.image.resize_area(img, [nh, nw]))
         return scaled_imgs
 
-    def generate_image_left(self, img, disp):
+    def generate_image_backward(self, img, disp):
         return self.bilinear_sampler(img, -disp)
 
-    def generate_image_right(self, img, disp):
+    def generate_image_forward(self, img, disp):
         return self.bilinear_sampler(img, disp)
 
     def bilinear_sampler(self, img, disp, name='bilinear_sampler'):
@@ -341,9 +341,9 @@ class MonodepthModel(object):
         with slim.arg_scope([slim.conv2d, slim.conv2d_transpose], activation_fn=tf.nn.elu):
             with tf.variable_scope('model', reuse=self.reuse_variables):
 
-                self.left_pyramid  = self.scale_pyramid(self.first_image, 4)
+                self.first_pyramid  = self.scale_pyramid(self.first_image, 4)
                 if self.mode == 'train':
-                    self.right_pyramid = self.scale_pyramid(self.second_image, 4)
+                    self.second_pyramid = self.scale_pyramid(self.second_image, 4)
 
                 if self.params.do_stereo:
                     self.model_input = tf.concat([self.first_image, self.second_image], 3)
@@ -362,87 +362,102 @@ class MonodepthModel(object):
         # STORE DISPARITIES
         with tf.variable_scope('disparities'):
             self.disp_est  = [self.disp1, self.disp2, self.disp3, self.disp4]
-            self.disp_left_est  = [d[:,:,:,0:2] for d in self.disp_est]
-            self.disp_right_est = [d[:,:,:,2:4] for d in self.disp_est]
+            self.disp_backward_est  = [d[:, :, :, 0:2] for d in self.disp_est]
+            self.disp_forward_est = [d[:, :, :, 2:4] for d in self.disp_est]
 
         if self.mode == 'test':
             return
 
         # GENERATE IMAGES
         with tf.variable_scope('images'):
-            self.left_est  = [self.generate_image_left(self.right_pyramid[i], self.disp_left_est[i])  for i in range(4)]
-            self.right_est = [self.generate_image_right(self.left_pyramid[i], self.disp_right_est[i]) for i in range(4)]
+            self.first_est  = [self.generate_image_backward(self.second_pyramid[i], self.disp_backward_est[i]) for i in range(4)]
+            self.second_est = [self.generate_image_forward(self.first_pyramid[i], self.disp_forward_est[i]) for i in range(4)]
 
-        # LR CONSISTENCY
-        with tf.variable_scope('left-right'):
-            self.right_to_left_disp = [self.generate_image_left(self.disp_right_est[i], self.disp_left_est[i])  for i in range(4)]
-            self.left_to_right_disp = [self.generate_image_right(self.disp_left_est[i], self.disp_right_est[i]) for i in range(4)]
+        # FB CONSISTENCY
+        with tf.variable_scope('forward-backward'):
+            self.second_to_first_disp = [
+                self.generate_image_backward(self.disp_forward_est[i], self.disp_backward_est[i])
+                for i in range(4)
+            ]
+            self.first_to_second_disp = [
+                self.generate_image_forward(self.disp_backward_est[i], self.disp_forward_est[i])
+                for i in range(4)
+            ]
 
         # DISPARITY SMOOTHNESS
         with tf.variable_scope('smoothness'):
-            self.disp_left_smoothness  = self.get_disparity_smoothness(self.disp_left_est,  self.left_pyramid)
-            self.disp_right_smoothness = self.get_disparity_smoothness(self.disp_right_est, self.right_pyramid)
+            self.disp_first_smoothness  = self.get_disparity_smoothness(self.disp_backward_est, self.first_pyramid)
+            self.disp_second_smoothness = self.get_disparity_smoothness(self.disp_forward_est, self.second_pyramid)
 
     def build_losses(self):
         with tf.variable_scope('losses', reuse=self.reuse_variables):
             # IMAGE RECONSTRUCTION
             # L1
-            self.l1_left = [tf.abs( self.left_est[i] - self.left_pyramid[i]) for i in range(4)]
-            self.l1_reconstruction_loss_left  = [tf.reduce_mean(l) for l in self.l1_left]
-            self.l1_right = [tf.abs(self.right_est[i] - self.right_pyramid[i]) for i in range(4)]
-            self.l1_reconstruction_loss_right = [tf.reduce_mean(l) for l in self.l1_right]
+            self.l1_first = [tf.abs(self.first_est[i] - self.first_pyramid[i]) for i in range(4)]
+            self.l1_reconstruction_loss_first  = [tf.reduce_mean(l) for l in self.l1_first]
+            self.l1_second = [tf.abs(self.second_est[i] - self.second_pyramid[i]) for i in range(4)]
+            self.l1_reconstruction_loss_second = [tf.reduce_mean(l) for l in self.l1_second]
 
             # SSIM
-            self.ssim_left = [self.SSIM( self.left_est[i],  self.left_pyramid[i]) for i in range(4)]
-            self.ssim_loss_left  = [tf.reduce_mean(s) for s in self.ssim_left]
-            self.ssim_right = [self.SSIM(self.right_est[i], self.right_pyramid[i]) for i in range(4)]
-            self.ssim_loss_right = [tf.reduce_mean(s) for s in self.ssim_right]
+            self.ssim_first = [self.SSIM(self.first_est[i], self.first_pyramid[i]) for i in range(4)]
+            self.ssim_loss_first  = [tf.reduce_mean(s) for s in self.ssim_first]
+            self.ssim_second = [self.SSIM(self.second_est[i], self.second_pyramid[i]) for i in range(4)]
+            self.ssim_loss_second = [tf.reduce_mean(s) for s in self.ssim_second]
 
-            # WEIGTHED SUM
-            self.image_loss_right = [self.params.alpha_image_loss * self.ssim_loss_right[i] + (1 - self.params.alpha_image_loss) * self.l1_reconstruction_loss_right[i] for i in range(4)]
-            self.image_loss_left  = [self.params.alpha_image_loss * self.ssim_loss_left[i]  + (1 - self.params.alpha_image_loss) * self.l1_reconstruction_loss_left[i]  for i in range(4)]
-            self.image_loss = tf.add_n(self.image_loss_left + self.image_loss_right)
+            # WEIGHTED SUM
+            self.image_loss_second = [
+                self.params.alpha_image_loss * self.ssim_loss_second[i] +
+                (1 - self.params.alpha_image_loss) * self.l1_reconstruction_loss_second[i]
+                for i in range(4)
+            ]
+            self.image_loss_first  = [
+                self.params.alpha_image_loss * self.ssim_loss_first[i] +
+                (1 - self.params.alpha_image_loss) * self.l1_reconstruction_loss_first[i]
+                for i in range(4)
+            ]
+            self.image_loss = tf.add_n(self.image_loss_first + self.image_loss_second)
 
             # DISPARITY SMOOTHNESS
-            self.disp_left_loss  = [tf.reduce_mean(tf.abs(self.disp_left_smoothness[i]))  / 2 ** i for i in range(4)]
-            self.disp_right_loss = [tf.reduce_mean(tf.abs(self.disp_right_smoothness[i])) / 2 ** i for i in range(4)]
-            self.disp_gradient_loss = tf.add_n(self.disp_left_loss + self.disp_right_loss)
+            self.disp_first_loss  = [tf.reduce_mean(tf.abs(self.disp_first_smoothness[i])) / 2 ** i for i in range(4)]
+            self.disp_second_loss = [tf.reduce_mean(tf.abs(self.disp_second_smoothness[i])) / 2 ** i for i in range(4)]
+            self.disp_gradient_loss = tf.add_n(self.disp_first_loss + self.disp_second_loss)
 
-            # LR CONSISTENCY
-            self.lr_left_loss  = [tf.reduce_mean(tf.abs(self.right_to_left_disp[i] - self.disp_left_est[i]))  for i in range(4)]
-            self.lr_right_loss = [tf.reduce_mean(tf.abs(self.left_to_right_disp[i] - self.disp_right_est[i])) for i in range(4)]
-            self.lr_loss = tf.add_n(self.lr_left_loss + self.lr_right_loss)
+            # FORWARD-BACKWARD CONSISTENCY
+            self.fb_first_loss  = [tf.reduce_mean(tf.abs(self.second_to_first_disp[i] - self.disp_backward_est[i])) for i in range(4)]
+            self.fb_second_loss = [tf.reduce_mean(tf.abs(self.first_to_second_disp[i] - self.disp_forward_est[i])) for i in range(4)]
+            self.fb_loss = tf.add_n(self.fb_first_loss + self.fb_second_loss)
 
             # TOTAL LOSS
-            self.total_loss = self.image_loss + self.params.disp_gradient_loss_weight * self.disp_gradient_loss + self.params.lr_loss_weight * self.lr_loss
+            self.total_loss = self.image_loss + self.params.disp_gradient_loss_weight * self.disp_gradient_loss + self.params.fb_loss_weight * self.fb_loss
 
     def build_summaries(self):
         # SUMMARIES
         with tf.device('/cpu:0'):
             for i in range(4):
-                tf.summary.scalar('ssim_loss_' + str(i), self.ssim_loss_left[i] + self.ssim_loss_right[i], collections=self.model_collection)
-                tf.summary.scalar('l1_loss_' + str(i), self.l1_reconstruction_loss_left[i] + self.l1_reconstruction_loss_right[i], collections=self.model_collection)
-                tf.summary.scalar('image_loss_' + str(i), self.image_loss_left[i] + self.image_loss_right[i], collections=self.model_collection)
-                tf.summary.scalar('disp_gradient_loss_' + str(i), self.disp_left_loss[i] + self.disp_right_loss[i], collections=self.model_collection)
-                tf.summary.scalar('lr_loss_' + str(i), self.lr_left_loss[i] + self.lr_right_loss[i], collections=self.model_collection)
+                tf.summary.scalar('ssim_loss_' + str(i), self.ssim_loss_first[i] + self.ssim_loss_second[i], collections=self.model_collection)
+                tf.summary.scalar('l1_loss_' + str(i), self.l1_reconstruction_loss_first[i] + self.l1_reconstruction_loss_second[i], collections=self.model_collection)
+                tf.summary.scalar('image_loss_' + str(i), self.image_loss_first[i] + self.image_loss_second[i], collections=self.model_collection)
+                tf.summary.scalar('disp_gradient_loss_' + str(i), self.disp_first_loss[i] + self.disp_second_loss[i], collections=self.model_collection)
+                tf.summary.scalar('fb_loss_' + str(i), self.fb_first_loss[i] + self.fb_second_loss[i], collections=self.model_collection)
 
-                zeros = tf.zeros(shape=tuple(self.disp_left_est[i].shape[0:3]) + (1,), dtype=self.disp_left_est[i].dtype)
-                disparity_left_rgb = tf.concat([self.disp_left_est[i], zeros], axis=3)
-                disparity_right_rgb = tf.concat([self.disp_right_est[i], zeros], axis=3)
-                tf.summary.image('disp_left_est_' + str(i), disparity_left_rgb, max_outputs=4, collections=self.model_collection)
-                tf.summary.image('disp_right_est_' + str(i), disparity_right_rgb, max_outputs=4, collections=self.model_collection)
+                disparity_first_abs = tf.reduce_sum(
+                    self.disp_backward_est[i] ** 2, axis=3, keepdims=True) ** 0.5
+                disparity_second_abs = tf.reduce_sum(
+                    self.disp_forward_est[i] ** 2, axis=3, keepdims=True) ** 0.5
+                tf.summary.image('disp_first_est_' + str(i), disparity_first_abs, max_outputs=4, collections=self.model_collection)
+                tf.summary.image('disp_second_est_' + str(i), disparity_second_abs, max_outputs=4, collections=self.model_collection)
 
                 if self.params.full_summary:
-                    tf.summary.image('left_est_' + str(i), self.left_est[i], max_outputs=4, collections=self.model_collection)
-                    tf.summary.image('right_est_' + str(i), self.right_est[i], max_outputs=4, collections=self.model_collection)
-                    tf.summary.image('ssim_left_'  + str(i), self.ssim_left[i],  max_outputs=4, collections=self.model_collection)
-                    tf.summary.image('ssim_right_' + str(i), self.ssim_right[i], max_outputs=4, collections=self.model_collection)
-                    tf.summary.image('l1_left_'  + str(i), self.l1_left[i],  max_outputs=4, collections=self.model_collection)
-                    tf.summary.image('l1_right_' + str(i), self.l1_right[i], max_outputs=4, collections=self.model_collection)
+                    tf.summary.image('first_est_' + str(i), self.first_est[i], max_outputs=4, collections=self.model_collection)
+                    tf.summary.image('second_est_' + str(i), self.second_est[i], max_outputs=4, collections=self.model_collection)
+                    tf.summary.image('ssim_first_' + str(i), self.ssim_first[i], max_outputs=4, collections=self.model_collection)
+                    tf.summary.image('ssim_second_' + str(i), self.ssim_second[i], max_outputs=4, collections=self.model_collection)
+                    tf.summary.image('l1_first_' + str(i), self.l1_first[i], max_outputs=4, collections=self.model_collection)
+                    tf.summary.image('l1_second_' + str(i), self.l1_second[i], max_outputs=4, collections=self.model_collection)
 
             if self.params.full_summary:
-                tf.summary.image('left', self.first_image, max_outputs=4, collections=self.model_collection)
-                tf.summary.image('right', self.second_image, max_outputs=4, collections=self.model_collection)
+                tf.summary.image('first', self.first_image, max_outputs=4, collections=self.model_collection)
+                tf.summary.image('second', self.second_image, max_outputs=4, collections=self.model_collection)
 
             if self.params.full_summary:
                 tf.summary.histogram("delta_position_f", self.delta_position[:, 0], collections=self.model_collection)

@@ -1,6 +1,9 @@
 import numpy as np
 import cv2
 import argparse
+
+import tqdm
+
 from evaluation_utils import *
 
 parser = argparse.ArgumentParser(description='Evaluation on the KITTI dataset')
@@ -56,7 +59,7 @@ if __name__ == '__main__':
     a2      = np.zeros(num_samples, np.float32)
     a3      = np.zeros(num_samples, np.float32)
     
-    for i in range(num_samples):
+    for i in tqdm.tqdm(range(num_samples)):
         
         gt_depth = gt_depths[i]
         pred_depth = pred_depths[i]

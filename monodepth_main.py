@@ -19,6 +19,7 @@ import re
 import time
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
+import tqdm
 
 from monodepth_model import *
 from monodepth_dataloader import *
@@ -37,7 +38,7 @@ parser.add_argument('--input_width',               type=int,   help='input width
 parser.add_argument('--batch_size',                type=int,   help='batch size', default=8)
 parser.add_argument('--num_epochs',                type=int,   help='number of epochs', default=50)
 parser.add_argument('--learning_rate',             type=float, help='initial learning rate', default=1e-4)
-parser.add_argument('--lr_loss_weight',            type=float, help='left-right consistency weight', default=1.0)
+parser.add_argument('--fb_loss_weight',            type=float, help='forward-backward consistency weight', default=1.0)
 parser.add_argument('--alpha_image_loss',          type=float, help='weight between SSIM and L1 in the image loss', default=0.85)
 parser.add_argument('--disp_gradient_loss_weight', type=float, help='disparity smoothness weigth', default=0.1)
 parser.add_argument('--do_stereo',                             help='if set, will train the stereo model', action='store_true')
@@ -191,14 +192,20 @@ def train(params):
 def test(params):
     """Test function."""
 
-    #dataloader = MonodepthDataloader(args.data_path, args.filenames_file, params, args.dataset, args.mode)
     dataloader = TemporalDepthDataloader(args.data_path, args.filenames_file, params, args.dataset, args.mode)
     first_image  = dataloader.first_image_batch
     second_image = dataloader.second_image_batch
     delta_position = dataloader.delta_position
     delta_angle = dataloader.delta_angle
 
-    model = MonodepthModel(params, args.mode, first_image, second_image, delta_angle=delta_angle, delta_position=delta_position)
+    model = MonodepthModel(
+        params=params,
+        mode="test",
+        first_image=first_image,
+        second_image=second_image,
+        delta_position=delta_position,
+        delta_angle=delta_angle
+    )
 
     # SESSION
     config = tf.ConfigProto(allow_soft_placement=True)
@@ -225,8 +232,13 @@ def test(params):
     print('now testing {} files'.format(num_test_samples))
     disparities    = np.zeros((num_test_samples, params.height, params.width), dtype=np.float32)
     disparities_pp = np.zeros((num_test_samples, params.height, params.width), dtype=np.float32)
-    for step in range(num_test_samples):
-        disp = sess.run(model.disp_left_est[0])
+    for step in tqdm.tqdm(range(num_test_samples)):
+        disp = sess.run(model.disp_backward_est[0])
+
+        # compute z-distance of disparity when both an X and Y pixel component exist
+        if disp.shape[-1] > 1:
+            disp = np.sum(disp ** 2, axis=-1, keepdims=True) ** 0.5
+
         disparities[step] = disp[0].squeeze()
         disparities_pp[step] = post_process_disparity(disp.squeeze())
 
@@ -256,7 +268,7 @@ def main(_):
         use_deconv=args.use_deconv,
         alpha_image_loss=args.alpha_image_loss,
         disp_gradient_loss_weight=args.disp_gradient_loss_weight,
-        lr_loss_weight=args.lr_loss_weight,
+        fb_loss_weight=args.fb_loss_weight,
         full_summary=args.full_summary)
 
     if args.mode == 'train':

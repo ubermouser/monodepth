@@ -49,8 +49,17 @@ def post_process_disparity(disp):
 def test_simple(params):
     """Test function."""
 
-    left  = tf.placeholder(tf.float32, [2, args.input_height, args.input_width, 3])
-    model = MonodepthModel(params, "test", left, None)
+    first_image  = tf.placeholder(tf.float32, [2, args.input_height, args.input_width, 3])
+    delta_position = tf.constant([[0., -0.54, 0.]] * 2)
+    delta_angle = tf.constant([[0., 0., 0.]] * 2)
+    model = MonodepthModel(
+        params=params,
+        mode="test",
+        first_image=first_image,
+        second_image=None,
+        delta_position=delta_position,
+        delta_angle=delta_angle
+    )
 
     input_image = scipy.misc.imread(args.image_path, mode="RGB")
     original_height, original_width, num_channels = input_image.shape
@@ -75,10 +84,15 @@ def test_simple(params):
     restore_path = args.checkpoint_path.split(".")[0]
     train_saver.restore(sess, restore_path)
 
-    disp = sess.run(model.disp_left_est[0], feed_dict={left: input_images})
+    disp = sess.run(model.disp_backward_est[0], feed_dict={first_image: input_images})
+
+    # compute z-distance of disparity when both an X and Y pixel component exist
+    if disp.shape[-1] > 1:
+        disp = np.sum(disp ** 2, axis=-1, keepdims=True) ** 0.5
+
     disp_pp = post_process_disparity(disp.squeeze()).astype(np.float32)
 
-    output_directory = os.path.dirname(args.image_path)
+    output_directory = os.path.dirname(args.checkpoint_path)
     output_name = os.path.splitext(os.path.basename(args.image_path))[0]
 
     np.save(os.path.join(output_directory, "{}_disp.npy".format(output_name)), disp_pp)
@@ -101,10 +115,11 @@ def main(_):
         use_deconv=False,
         alpha_image_loss=0,
         disp_gradient_loss_weight=0,
-        lr_loss_weight=0,
+        fb_loss_weight=0,
         full_summary=False)
 
     test_simple(params)
+
 
 if __name__ == '__main__':
     tf.app.run()
