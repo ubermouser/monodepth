@@ -116,6 +116,9 @@ def main(_):
         alpha_image_loss=0,
         disp_gradient_loss_weight=0,
         fb_loss_weight=0,
+        color_augmentation_prob=0.0,
+        flip_augmentation_prob=0.0,
+        swap_augmentation_prob=0.0,
         full_summary=False)
 
     test_simple(params)

@@ -41,6 +41,9 @@ parser.add_argument('--learning_rate',             type=float, help='initial lea
 parser.add_argument('--fb_loss_weight',            type=float, help='forward-backward consistency weight', default=1.0)
 parser.add_argument('--alpha_image_loss',          type=float, help='weight between SSIM and L1 in the image loss', default=0.85)
 parser.add_argument('--disp_gradient_loss_weight', type=float, help='disparity smoothness weigth', default=0.1)
+parser.add_argument('--color_augmentation_prob',   type=float, help='color augmentation probability', default=0.5)
+parser.add_argument('--flip_augmentation_prob',    type=float, help='flip augmentation probability', default=0.5)
+parser.add_argument('--swap_augmentation_prob',    type=float, help='swap augmentation probability', default=0.5)
 parser.add_argument('--do_stereo',                             help='if set, will train the stereo model', action='store_true')
 parser.add_argument('--wrap_mode',                 type=str,   help='bilinear sampler wrap mode, edge or border', default='border')
 parser.add_argument('--use_deconv',                            help='if set, will use transposed convolutions', action='store_true')
@@ -93,8 +96,14 @@ def train(params):
         print("total number of samples: {}".format(num_training_samples))
         print("total number of steps: {}".format(num_total_steps))
 
-        #dataloader = MonodepthDataloader(args.data_path, args.filenames_file, params, args.dataset, args.mode)
-        dataloader = TemporalDepthDataloader(args.data_path, args.filenames_file, params, args.dataset, args.mode)
+        dataloader = TemporalDepthDataloader(
+            data_path=args.data_path,
+            filenames_file=args.filenames_file,
+            params=params,
+            dataset=args.dataset,
+            mode=args.mode
+        )
+
         first_image  = dataloader.first_image_batch
         second_image = dataloader.second_image_batch
         delta_position = dataloader.delta_position
@@ -192,7 +201,13 @@ def train(params):
 def test(params):
     """Test function."""
 
-    dataloader = TemporalDepthDataloader(args.data_path, args.filenames_file, params, args.dataset, args.mode)
+    dataloader = TemporalDepthDataloader(
+        data_path=args.data_path,
+        filenames_file=args.filenames_file,
+        params=params,
+        dataset=args.dataset,
+        mode=args.mode
+    )
     first_image  = dataloader.first_image_batch
     second_image = dataloader.second_image_batch
     delta_position = dataloader.delta_position
@@ -269,6 +284,9 @@ def main(_):
         alpha_image_loss=args.alpha_image_loss,
         disp_gradient_loss_weight=args.disp_gradient_loss_weight,
         fb_loss_weight=args.fb_loss_weight,
+        color_augmentation_prob=args.color_augmentation_prob,
+        flip_augmentation_prob=args.flip_augmentation_prob,
+        swap_augmentation_prob=args.swap_augmentation_prob,
         full_summary=args.full_summary)
 
     if args.mode == 'train':

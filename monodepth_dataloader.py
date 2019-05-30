@@ -148,21 +148,27 @@ class TemporalDepthDataloader(MonodepthDataloader):
         if mode == 'train':
             # randomly flip images
             do_flip = tf.random_uniform([], 0, 1)
-            first_image = tf.cond(do_flip > 0.5, lambda: tf.image.flip_left_right(first_image), lambda: first_image)
-            second_image = tf.cond(do_flip > 0.5, lambda: tf.image.flip_left_right(second_image),  lambda: second_image)
-            delta_position = tf.cond(do_flip > 0.5, lambda: delta_position * [1., -1., 1.], lambda: delta_position)
-            delta_angle = tf.cond(do_flip > 0.5, lambda: delta_angle * [1., -1., 1.], lambda: delta_angle)
+            first_image, second_image = tf.cond(
+                do_flip < self.params.flip_augmentation_prob,
+                lambda: (tf.image.flip_left_right(second_image), tf.image.flip_left_right(first_image)),
+                lambda: (first_image, second_image)
+            )
 
             # randomly swap images
             do_swap = tf.random_uniform([], 0, 1)
-            first_image = tf.cond(do_swap > 0.5, lambda: second_image, lambda: first_image)
-            second_image = tf.cond(do_swap > 0.5, lambda: first_image,  lambda: second_image)
-            delta_position = tf.cond(do_swap > 0.5, lambda: delta_position * -1., lambda: delta_position)
-            delta_angle = tf.cond(do_swap > 0.5, lambda: delta_angle * -1., lambda: delta_angle)
+            first_image, second_image, delta_position, delta_angle = tf.cond(
+                do_swap < self.params.swap_augmentation_prob,
+                lambda: (second_image, first_image, delta_position * -1., delta_angle * -1.),
+                lambda: (first_image, second_image, delta_position, delta_angle)
+            )
 
             # randomly augment images
             do_augment  = tf.random_uniform([], 0, 1)
-            first_image, second_image = tf.cond(do_augment > 0.5, lambda: self.augment_image_pair(first_image, second_image), lambda: (first_image, second_image))
+            first_image, second_image = tf.cond(
+                do_augment < self.params.color_augmentation_prob,
+                lambda: self.augment_image_pair(first_image, second_image),
+                lambda: (first_image, second_image)
+            )
 
             first_image.set_shape( [None, None, 3])
             second_image.set_shape([None, None, 3])

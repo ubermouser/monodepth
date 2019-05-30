@@ -22,19 +22,23 @@ import tensorflow.contrib.resampler as resampler
 
 from bilinear_sampler import *
 
-monodepth_parameters = namedtuple('parameters', 
-                        'encoder, '
-                        'height, width, '
-                        'batch_size, '
-                        'num_threads, '
-                        'num_epochs, '
-                        'do_stereo, '
-                        'wrap_mode, '
-                        'use_deconv, '
-                        'alpha_image_loss, '
-                        'disp_gradient_loss_weight, '
-                        'fb_loss_weight, '
-                        'full_summary')
+monodepth_parameters = namedtuple(
+    'parameters',
+    'encoder, '
+    'height, width, '
+    'batch_size, '
+    'num_threads, '
+    'num_epochs, '
+    'do_stereo, '
+    'wrap_mode, '
+    'use_deconv, '
+    'alpha_image_loss, '
+    'disp_gradient_loss_weight, '
+    'fb_loss_weight, '
+    'color_augmentation_prob, '
+    'flip_augmentation_prob, '
+    'swap_augmentation_prob, '
+    'full_summary')
 
 class MonodepthModel(object):
     """monodepth model"""
