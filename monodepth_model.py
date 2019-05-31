@@ -35,6 +35,8 @@ monodepth_parameters = namedtuple(
     'alpha_image_loss, '
     'disp_gradient_loss_weight, '
     'fb_loss_weight, '
+    'explainability_loss_weight, '
+    'explainability_mask, '
     'color_augmentation_prob, '
     'flip_augmentation_prob, '
     'swap_augmentation_prob, '
@@ -123,12 +125,12 @@ class MonodepthModel(object):
         C1 = 0.01 ** 2
         C2 = 0.03 ** 2
 
-        mu_x = slim.avg_pool2d(x, 3, 1, 'VALID')
-        mu_y = slim.avg_pool2d(y, 3, 1, 'VALID')
+        mu_x = slim.avg_pool2d(x, 3, 1, 'SAME')
+        mu_y = slim.avg_pool2d(y, 3, 1, 'SAME')
 
-        sigma_x  = slim.avg_pool2d(x ** 2, 3, 1, 'VALID') - mu_x ** 2
-        sigma_y  = slim.avg_pool2d(y ** 2, 3, 1, 'VALID') - mu_y ** 2
-        sigma_xy = slim.avg_pool2d(x * y , 3, 1, 'VALID') - mu_x * mu_y
+        sigma_x  = slim.avg_pool2d(x ** 2, 3, 1, 'SAME') - mu_x ** 2
+        sigma_y  = slim.avg_pool2d(y ** 2, 3, 1, 'SAME') - mu_y ** 2
+        sigma_xy = slim.avg_pool2d(x * y , 3, 1, 'SAME') - mu_x * mu_y
 
         SSIM_n = (2 * mu_x * mu_y + C1) * (2 * sigma_xy + C2)
         SSIM_d = (mu_x ** 2 + mu_y ** 2 + C1) * (sigma_x + sigma_y + C2)
@@ -154,6 +156,9 @@ class MonodepthModel(object):
     def get_disp(self, x):
         disp = 0.3 * self.conv(x, 4, 3, 1, tf.nn.tanh)
         return disp
+
+    def get_explainability(self, x):
+        return self.conv(x, 2, 3, 1, tf.nn.sigmoid)
 
     def conv(self, x, num_out_layers, kernel_size, stride, activation_fn=tf.nn.elu):
         p = np.floor((kernel_size - 1) / 2).astype(np.int32)
@@ -211,6 +216,14 @@ class MonodepthModel(object):
         pose_reshaped = tf.reshape(pose_tiled, (conv_shape[0], conv_shape[1], conv_shape[2], 16))
 
         return pose_reshaped
+
+    def image_weight(self, x, explainability):
+        if not self.params.explainability_mask:
+            weighted_x = x
+        else:
+            weighted_x = [x[i] * explainability[i] for i in range(4)]
+
+        return [tf.reduce_mean(val) for val in weighted_x]
 
     def build_vgg(self):
         #set convenience functions
@@ -279,6 +292,14 @@ class MonodepthModel(object):
             iconv1  = conv(concat1,   16, 3, 1)
             self.disp1 = self.get_disp(iconv1)
 
+        if self.params.explainability_mask:
+            with tf.variable_scope("explainability"):
+                self.explain1 = self.get_explainability(iconv1)
+                self.explain2 = self.get_explainability(iconv2)
+                self.explain3 = self.get_explainability(iconv3)
+                self.explain4 = self.get_explainability(iconv4)
+
+
     def build_resnet50(self):
         #set convenience functions
         conv   = self.conv
@@ -341,6 +362,13 @@ class MonodepthModel(object):
             iconv1  = conv(concat1,   16, 3, 1)
             self.disp1 = self.get_disp(iconv1)
 
+        if self.params.explainability_mask:
+            with tf.variable_scope("explainability"):
+                self.explain1 = self.get_explainability(iconv1)
+                self.explain2 = self.get_explainability(iconv2)
+                self.explain3 = self.get_explainability(iconv3)
+                self.explain4 = self.get_explainability(iconv4)
+
     def build_model(self):
         with slim.arg_scope([slim.conv2d, slim.conv2d_transpose], activation_fn=tf.nn.elu):
             with tf.variable_scope('model', reuse=self.reuse_variables):
@@ -368,6 +396,16 @@ class MonodepthModel(object):
             self.disp_est  = [self.disp1, self.disp2, self.disp3, self.disp4]
             self.disp_backward_est  = [d[:, :, :, 0:2] for d in self.disp_est]
             self.disp_forward_est = [d[:, :, :, 2:4] for d in self.disp_est]
+
+        # EXPLAINABILITY MASK
+        with tf.variable_scope('explainability'):
+            if self.params.explainability_mask:
+                self.explain_est = [self.explain1, self.explain2, self.explain3, self.explain4]
+            else:
+                self.explain_est = []
+
+            self.explain_backward_est = [e[:, :, :, 0:1] for e in self.explain_est]
+            self.explain_forward_est  = [e[:, :, :, 1:2] for e in self.explain_est]
 
         # GENERATE IMAGES
         with tf.variable_scope('images'):
@@ -406,15 +444,15 @@ class MonodepthModel(object):
             # IMAGE RECONSTRUCTION
             # L1
             self.l1_first = [tf.abs(self.first_est[i] - self.first_pyramid[i]) for i in range(4)]
-            self.l1_reconstruction_loss_first  = [tf.reduce_mean(l) for l in self.l1_first]
+            self.l1_reconstruction_loss_first  = self.image_weight(self.l1_first, self.explain_backward_est)
             self.l1_second = [tf.abs(self.second_est[i] - self.second_pyramid[i]) for i in range(4)]
-            self.l1_reconstruction_loss_second = [tf.reduce_mean(l) for l in self.l1_second]
+            self.l1_reconstruction_loss_second = self.image_weight(self.l1_second, self.explain_forward_est)
 
             # SSIM
             self.ssim_first = [self.SSIM(self.first_est[i], self.first_pyramid[i]) for i in range(4)]
-            self.ssim_loss_first  = [tf.reduce_mean(s) for s in self.ssim_first]
+            self.ssim_loss_first  = self.image_weight(self.ssim_first, self.explain_backward_est)
             self.ssim_second = [self.SSIM(self.second_est[i], self.second_pyramid[i]) for i in range(4)]
-            self.ssim_loss_second = [tf.reduce_mean(s) for s in self.ssim_second]
+            self.ssim_loss_second = self.image_weight(self.ssim_second, self.explain_forward_est)
 
             # WEIGHTED SUM
             self.image_loss_second = [
@@ -439,8 +477,27 @@ class MonodepthModel(object):
             self.fb_second_loss = [tf.reduce_mean(tf.abs(self.first_to_second_disp[i] - self.disp_forward_est[i])) for i in range(4)]
             self.fb_loss = tf.add_n(self.fb_first_loss + self.fb_second_loss)
 
+            # EXPLAINABILITY LOSS
+            if self.params.explainability_mask:
+                # cross-entropy where the label is 1 (totally explainable) for every pixel
+                self.explain_forward_loss = [
+                    -tf.reduce_mean(tf.log(self.explain_forward_est[i])) / 2 ** i
+                    for i in range(4)
+                ]
+                self.explain_backward_loss = [
+                    -tf.reduce_mean(tf.log(self.explain_backward_est[i])) / 2 ** i
+                    for i in range(4)
+                ]
+                self.explainability_loss = tf.add_n(self.explain_forward_loss + self.explain_backward_loss)
+            else:
+                self.explainability_loss = 0.
+
             # TOTAL LOSS
-            self.total_loss = self.image_loss + self.params.disp_gradient_loss_weight * self.disp_gradient_loss + self.params.fb_loss_weight * self.fb_loss
+            self.total_loss = \
+                self.image_loss + \
+                self.params.disp_gradient_loss_weight * self.disp_gradient_loss + \
+                self.params.fb_loss_weight * self.fb_loss + \
+                self.params.explainability_loss_weight * self.explainability_loss
 
     def build_summaries(self):
         # SUMMARIES
@@ -451,6 +508,8 @@ class MonodepthModel(object):
                 tf.summary.scalar('image_loss_' + str(i), self.image_loss_first[i] + self.image_loss_second[i], collections=self.model_collection)
                 tf.summary.scalar('disp_gradient_loss_' + str(i), self.disp_first_loss[i] + self.disp_second_loss[i], collections=self.model_collection)
                 tf.summary.scalar('fb_loss_' + str(i), self.fb_first_loss[i] + self.fb_second_loss[i], collections=self.model_collection)
+                if self.params.explainability_mask:
+                    tf.summary.scalar('explain_loss_' + str(i), self.explain_forward_loss[i] + self.explain_backward_loss[i], collections=self.model_collection)
 
                 disparity_first_abs = tf.reduce_sum(
                     self.disp_backward_est[i] ** 2, axis=3, keepdims=True) ** 0.5
@@ -466,6 +525,10 @@ class MonodepthModel(object):
                     tf.summary.image('ssim_second_' + str(i), self.ssim_second[i], max_outputs=4, collections=self.model_collection)
                     tf.summary.image('l1_first_' + str(i), self.l1_first[i], max_outputs=4, collections=self.model_collection)
                     tf.summary.image('l1_second_' + str(i), self.l1_second[i], max_outputs=4, collections=self.model_collection)
+
+                    if self.params.explainability_mask:
+                        tf.summary.image('explain_first_' + str(i), self.explain_backward_est[i], max_outputs=4, collections=self.model_collection)
+                        tf.summary.image('explain_second_' + str(i), self.explain_forward_est[i], max_outputs=4, collections=self.model_collection)
 
             if self.params.full_summary:
                 tf.summary.image('first', self.first_image, max_outputs=4, collections=self.model_collection)

@@ -122,6 +122,8 @@ def main(_):
         alpha_image_loss=0,
         disp_gradient_loss_weight=0,
         fb_loss_weight=0,
+        explainability_loss_weight=0,
+        explainability_mask=False,
         color_augmentation_prob=0.0,
         flip_augmentation_prob=0.0,
         swap_augmentation_prob=0.0,

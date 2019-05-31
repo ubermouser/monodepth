@@ -41,6 +41,7 @@ parser.add_argument('--learning_rate',             type=float, help='initial lea
 parser.add_argument('--fb_loss_weight',            type=float, help='forward-backward consistency weight', default=1.0)
 parser.add_argument('--alpha_image_loss',          type=float, help='weight between SSIM and L1 in the image loss', default=0.85)
 parser.add_argument('--disp_gradient_loss_weight', type=float, help='disparity smoothness weigth', default=0.1)
+parser.add_argument('--explainability_loss_weight',type=float, help='explainability loss weight', default=0.0)
 parser.add_argument('--color_augmentation_prob',   type=float, help='color augmentation probability', default=0.5)
 parser.add_argument('--flip_augmentation_prob',    type=float, help='flip augmentation probability', default=0.5)
 parser.add_argument('--swap_augmentation_prob',    type=float, help='swap augmentation probability', default=0.5)
@@ -284,6 +285,8 @@ def main(_):
         alpha_image_loss=args.alpha_image_loss,
         disp_gradient_loss_weight=args.disp_gradient_loss_weight,
         fb_loss_weight=args.fb_loss_weight,
+        explainability_loss_weight=args.explainability_loss_weight,
+        explainability_mask=args.explainability_loss_weight > 0,
         color_augmentation_prob=args.color_augmentation_prob,
         flip_augmentation_prob=args.flip_augmentation_prob,
         swap_augmentation_prob=args.swap_augmentation_prob,
