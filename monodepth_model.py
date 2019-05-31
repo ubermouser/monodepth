@@ -369,13 +369,21 @@ class MonodepthModel(object):
             self.disp_backward_est  = [d[:, :, :, 0:2] for d in self.disp_est]
             self.disp_forward_est = [d[:, :, :, 2:4] for d in self.disp_est]
 
-        if self.mode == 'test':
-            return
-
         # GENERATE IMAGES
         with tf.variable_scope('images'):
-            self.first_est  = [self.generate_image_backward(self.second_pyramid[i], self.disp_backward_est[i]) for i in range(4)]
-            self.second_est = [self.generate_image_forward(self.first_pyramid[i], self.disp_forward_est[i]) for i in range(4)]
+            if hasattr(self, 'first_pyramid'):
+                self.second_est = [
+                    self.generate_image_forward(self.first_pyramid[i], self.disp_forward_est[i])
+                    for i in range(4)
+                ]
+            if hasattr(self, 'second_pyramid'):
+                self.first_est = [
+                    self.generate_image_backward(self.second_pyramid[i], self.disp_backward_est[i])
+                    for i in range(4)
+                ]
+
+        if self.mode == 'test':
+            return
 
         # FB CONSISTENCY
         with tf.variable_scope('forward-backward'):

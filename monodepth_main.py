@@ -248,7 +248,7 @@ def test(params):
     disparities    = np.zeros((num_test_samples, params.height, params.width), dtype=np.float32)
     disparities_pp = np.zeros((num_test_samples, params.height, params.width), dtype=np.float32)
     for step in tqdm.tqdm(range(num_test_samples)):
-        disp = sess.run(model.disp_backward_est[0])
+        disp = sess.run(model.disp_forward_est[0])
 
         # compute z-distance of disparity when both an X and Y pixel component exist
         if disp.shape[-1] > 1:

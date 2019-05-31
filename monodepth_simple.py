@@ -84,7 +84,10 @@ def test_simple(params):
     restore_path = args.checkpoint_path.split(".")[0]
     train_saver.restore(sess, restore_path)
 
-    disp = sess.run(model.disp_backward_est[0], feed_dict={first_image: input_images})
+    disp, reconstructed_image = sess.run(
+        fetches=[model.disp_forward_est[0], model.second_est[0]],
+        feed_dict={first_image: input_images}
+    )
 
     # compute z-distance of disparity when both an X and Y pixel component exist
     if disp.shape[-1] > 1:
@@ -98,6 +101,9 @@ def test_simple(params):
     np.save(os.path.join(output_directory, "{}_disp.npy".format(output_name)), disp_pp)
     disp_to_img = scipy.misc.imresize(disp_pp.squeeze(), [original_height, original_width])
     plt.imsave(os.path.join(output_directory, "{}_disp.png".format(output_name)), disp_to_img, cmap='plasma')
+
+    recon_to_img = scipy.misc.imresize(reconstructed_image[0], [original_height, original_width])
+    plt.imsave(os.path.join(output_directory, "{}_rec.png".format(output_name)), recon_to_img)
 
     print('done!')
 
